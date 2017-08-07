@@ -11,8 +11,6 @@ RUN_PROJECT=1
 RUN_MODE=foreground
 EXPERT=0
 
-BELA_PYTHON27=
-
 SCRIPTDIR=$(dirname "$0")
 [ -z $SCRIPTDIR ] && SCRIPTDIR="./" || SCRIPTDIR=$SCRIPTDIR/ 
 [ -z $HVRESOURCES_DIR ] && HVRESOURCES_DIR=$SCRIPTDIR/hvresources/
@@ -22,7 +20,7 @@ projectpath="$SCRIPTDIR/../tmp/heavy/hvtemp/"
 
 if [ -z "$BELA_PYTHON27" ]; then
     for PY in python python2.7 ; do
-        python --version 2>&1 | grep "2\.7" >/dev/null 2>&1
+        $PY --version 2>&1 | grep "2\.7" >/dev/null 2>&1
         if [ $? -eq 0 ]; then
             BELA_PYTHON27=$PY
             break;
