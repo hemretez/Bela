@@ -10,7 +10,8 @@ COMMAND_ARGS=
 RUN_PROJECT=1
 RUN_MODE=foreground
 EXPERT=0
-PRE_BUILT=1
+
+BELA_PYTHON27=
 
 SCRIPTDIR=$(dirname "$0")
 [ -z $SCRIPTDIR ] && SCRIPTDIR="./" || SCRIPTDIR=$SCRIPTDIR/ 
@@ -21,7 +22,7 @@ projectpath="$SCRIPTDIR/../tmp/heavy/hvtemp/"
 
 if [ -z "$BELA_PYTHON27" ]; then
     for PY in python python2.7 ; do
-        $PY --version 2>&1 | grep "2\.7" >/dev/null 2>&1
+        python --version 2>&1 | grep "2\.7" >/dev/null 2>&1
         if [ $? -eq 0 ]; then
             BELA_PYTHON27=$PY
             break;
@@ -56,9 +57,7 @@ information available here https://github.com/BelaPlatform/Bela/wiki/Running-Pur
 
 Heavy-specific options:
 	-r : builds against a specific Heavy release. Default is: $release (stable)
-		( see revision list here https://enzienaudio.com/a/releases )
-	--src-only : only retrieve the source files (and not the pre-built object files). With this option
-		selected, building the project will take longer but you can save bandwidth and tweak compiler options.
+            ( see revision list here https://enzienaudio.com/a/releases )
 	--noupload : does not use the online compiler, only compiles the current source files.
 	-o arg : sets the path where files returned from the online compiler are stored.
 "
@@ -111,9 +110,6 @@ do
 		-r | --release )
 			shift
 			release=$1
-		;;
-		--src-only )
-			PRE_BUILT=0
 		;;
 		--noupload )
 			NO_UPLOAD=1
@@ -180,21 +176,26 @@ uploadBuildRun(){
 		#recreate the destination folder"
 		mkdir -p "$projectpath"
         
-        echo "Invoking the online compiler..."
-        if [ "$PRE_BUILT" -eq 1 ]
-        then
-            UPLOADER_EXTRA_FLAGS=--archive_only
-            HEAVY_JOB="bela-linux-armv7a"
-        else
-            UPLOADER_EXTRA_FLAGS=
-            HEAVY_JOB="c-src"
-        fi
+		echo "Invoking the online compiler..."
         # invoke the online compiler
-        "$BELA_PYTHON27" $HVRESOURCES_DIR/uploader.py "$pdpath"/ -n $ENZIENAUDIO_COM_PATCH_NAME -g $HEAVY_JOB -o "$projectpath" $RELEASE_STRING $UPLOADER_EXTRA_FLAGS ||\
+        "$BELA_PYTHON27" $HVRESOURCES_DIR/uploader.py "$pdpath"/ -n $ENZIENAUDIO_COM_PATCH_NAME -g c-src -o "$projectpath" $RELEASE_STRING ||\
             { echo "ERROR: an error occurred while executing the uploader.py script"; exit $?; }
     fi;
 
     echo "";
+
+    # Test that files have been retrieved from the online compiler.
+	# TODO: skip this now that uplodaer.py returns meaningful exit codes 
+    for file in $HEAVY_FILES;
+    do
+        ls "$projectpath"/$file >/dev/null 2>&1 || { 
+			[ $NO_UPLOAD -eq 0 ] && printf "The online compiler did not return all the files or failed without notice, please try again and/or change HEAVY_FILES to be less strict.\n\n" ||\
+			printf "Folder $projectpath does not contain a valid Heavy project\n";
+			exit 1; }
+    done
+
+    # Apply any Bela-specific patches here
+    # ... none at the moment
 
     BBB_PROJECT_FOLDER=$BBB_PROJECT_HOME"/"$BBB_PROJECT_NAME #make sure there is no trailing slash here
     BBB_NETWORK_TARGET_FOLDER=$BBB_ADDRESS:$BBB_PROJECT_FOLDER
@@ -214,41 +215,18 @@ uploadBuildRun(){
     fi
     
     echo "Updating files on board..."
+    # HeavyContext* files tend to hang when transferring with rsync because they are very large and -c checksum takes a lot, I guess
     
     touch $reference_time_file
-	MAKE_COMMAND_BASE="make --no-print-directory COMPILER=gcc QUIET=true -C $BBB_BELA_HOME PROJECT='$BBB_PROJECT_NAME'"
     # Transfer the files 
-	if [ "$PRE_BUILT" -eq 1 ]
-	then
-		ARCHIVE_NAME=archive.$HEAVY_JOB.zip
-		BBB_ARCHIVE_PATH=/tmp/$ARCHIVE_NAME
-		# copy the archive
-		scp "$projectpath/$ARCHIVE_NAME" $BBB_ADDRESS:$BBB_ARCHIVE_PATH
-		rm "$projectpath/$ARCHIVE_NAME"
-		ssh $BBB_ADDRESS bash -c "'mkdir -p '"$BBB_BELA_HOME"'/projects/'"$BBB_PROJECT_NAME"' && $MAKE_COMMAND_BASE heavy-unzip-archive HEAVY_ARCHIVE=$BBB_ARCHIVE_PATH'" || exit 1
-        # in this case, most files at the destination will not exist in the
-        # source folder, as the latter will only contain the zip archive and
-        # any files (if any) from the heavy/ subfolder OR the default heavy
-        # render.cpp, so we avoid deleting them.
-		RSYNC_SHOULD_DELETE=
-	else
-		RSYNC_SHOULD_DELETE=--delete-during
-	fi
 	if [ "$RSYNC_AVAILABLE" -eq 1 ]
 	then
-        # Heavy_bela.cpp tends to hang when transferring with rsync because it
-        # may be very large.
-        # So we always use `scp` with it, also because it changes every time.
-        # In case we are using PRE_BUILT=1, then the file will not even exist
-        # (hence the [ -f ... ] below)
-		BIG_FILE=Heavy_$ENZIENAUDIO_COM_PATCH_NAME.cpp
-
-		rsync -acv --no-t $RSYNC_SHOULD_DELETE --exclude="$BIG_FILE" --exclude=build --exclude=$BBB_PROJECT_NAME "$projectpath"/ "$BBB_NETWORK_TARGET_FOLDER" &&\
-		[ $NO_UPLOAD -eq 1 ] || { [ -f "$projectpath"/$BIG_FILE ] && scp -rp "$projectpath"/$BIG_FILE $BBB_NETWORK_TARGET_FOLDER || true; } ||\
+		rsync -ac --out-format="   %n" --no-t --delete-during --exclude='HeavyContext_'$ENZIENAUDIO_COM_PATCH_NAME'.*' --exclude=build --exclude=$BBB_PROJECT_NAME "$projectpath"/ "$BBB_NETWORK_TARGET_FOLDER" &&\
+        { [ $NO_UPLOAD -eq 1 ] || scp -rp "$projectpath"/HeavyContext* $BBB_NETWORK_TARGET_FOLDER; } ||\
 		{ echo "ERROR: while synchronizing files with the BBB. Is the board connected?"; exit 1; }
 	else
 		echo "using scp..."
-		echo "WARNING: it is HEAVILY recommended that you install rsync on your system when building Heavy projects, in order to make the build much faster"
+		echo "WARNING: it is HEAVILY recommended that you install rsync on your system when building Heavy projects, in order to make compiling much faster"
 		echo "Cleaning the destination folder..."
 		ssh $BBB_ADDRESS "rm -rf \"$BBB_PROJECT_FOLDER\"; mkdir -p \"$BBB_PROJECT_FOLDER\""
 		echo "Copying the project files"
@@ -264,7 +242,9 @@ uploadBuildRun(){
     #    ssh $BBB_ADDRESS "rm -rf "$BBB_PROJECT_FOLDER/$BBB_PROJECT_NAME;
     #fi;
     # Make new Bela executable and run
-    MAKE_COMMAND="$MAKE_COMMAND_BASE CL='$COMMAND_ARGS' $BBB_MAKEFILE_OPTIONS"
+    # It does not look very nice that we type the same things over and over
+    # but that is because each line is an ssh session in its own right
+    MAKE_COMMAND="make --no-print-directory COMPILER=gcc QUIET=true -C $BBB_BELA_HOME PROJECT='$BBB_PROJECT_NAME' CL='$COMMAND_ARGS' $BBB_MAKEFILE_OPTIONS"
     if [ $RUN_PROJECT -eq 0 ]
     then
         echo "Building project..."
