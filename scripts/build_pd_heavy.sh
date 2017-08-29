@@ -38,7 +38,7 @@ fi;
 
 usage_brief(){
 	printf "Usage: $THIS_SCRIPT path/to/project "
-    printf '[-o] [--noupload] [-r|--release release] '
+    printf '[-o] [--noupload] [-r|--release release] [--custom path]'
 	build_script_usage_brief
 	run_script_usage_brief
 	echo
@@ -48,7 +48,7 @@ usage ()
 {
 usage_brief
 echo "
-example: build_pd.sh -o ../projects/heavy/hello-world ../projects/heavy/pd/hello-world
+example: $THIS_SCRIPT ../projects/heavy/pd/hello-world
       
 This program compiles a PureData patch using the online Heavy Compiler. Before using this
 script you need to have set up your Enzien Audio account and familiarized yourself with the
@@ -61,6 +61,7 @@ Heavy-specific options:
 		selected, building the project will take longer but you can save bandwidth and tweak compiler options.
 	--noupload : does not use the online compiler, only compiles the current source files.
 	-o arg : sets the path where files returned from the online compiler are stored.
+	--custom arg: sets the path of C++ files to use instead of the default render.cpp
 "
 	build_script_usage
 	run_script_usage
@@ -118,6 +119,10 @@ do
 		--noupload )
 			NO_UPLOAD=1
 		;;
+		--custom)
+			shift
+			CUSTOM_HEAVY_SOURCE_PATH=$1
+		;;
 		--help|-h|-\?)
 			usage
 			exit
@@ -137,9 +142,8 @@ do
     shift
 done
 
-[ $FORCE -eq 1 ] && EXPERT=1
-
 [ "$NO_UPLOAD" -eq 0 ] && [ -z "$pdpath" ] && { echo "Error: a path to the source folder should be provided"; exit 1; }
+[ -z "$CUSTOM_HEAVY_SOURCE_PATH" ] && CUSTOM_HEAVY_SOURCE_PATH="$pdpath/heavy/"
 
 [ -z $BBB_PROJECT_NAME ] && BBB_PROJECT_NAME="$(basename $(cd "$pdpath" && pwd))"
 
@@ -155,11 +159,8 @@ fi
 #TODO: get a reliable, exhaustive, up-to-date list.
 HEAVY_FILES='Heavy* Hv*'
 
-[ $EXPERT -eq 0 ] && check_board_alive
-# Not sure if set_date should be taken out by expert mode ...
-# The expert will have to remember to run set_date after powering up the board 
-# in case the updated files are not being rebuilt
-[ $EXPERT -eq 0 ] && set_date
+# The expert will have to remember to run set_date after powering up the board if needed
+[ $EXPERT -eq 0 ] && check_board_alive_and_set_date
 
 # check if project exists
 [ $FORCE -eq 1 ] ||	check_project_exists_prompt $BBB_PROJECT_NAME
@@ -200,14 +201,12 @@ uploadBuildRun(){
     BBB_NETWORK_TARGET_FOLDER=$BBB_ADDRESS:$BBB_PROJECT_FOLDER
 
     # check how to copy/sync render.cpp file...
-    # check if custom heavy/render.cpp file is provided in the input folder
-    # TODO: extend this to all non-Pd files
-	CUSTOM_HEAVY_SOURCE_PATH="$pdpath/heavy/"
+    # check if custom CUSTOM_HEAVY_SOURCE_PATH folder is provided
     if [ -e "$CUSTOM_HEAVY_SOURCE_PATH" ] && [ "$(ls $CUSTOM_HEAVY_SOURCE_PATH)" ]; then
-	# if PROJECTNAME/heavy/ exists and is not empty, then copy the whole folder content 
-        echo "Found custom heavy/ folder in the project folder, using those files instead of the default render.cpp:"
-		ls "$CUSTOM_HEAVY_SOURCE_PATH"
-        cp "$CUSTOM_HEAVY_SOURCE_PATH"/* "$projectpath/" || exit 1
+        echo "Custom heavy folder in use: $CUSTOM_HEAVY_SOURCE_PATH, using files in there instead of the default render.cpp:"
+		[ -d "$CUSTOM_HEAVY_SOURCE_PATH" ] && {
+			cp -v "$CUSTOM_HEAVY_SOURCE_PATH"/* "$projectpath/" || exit 1;
+		} || { cp -v "$CUSTOM_HEAVY_SOURCE_PATH" "$projectpath/" || exit 1; }
     else
         echo "Using Heavy default render.cpp"
         cp "$HVRESOURCES_DIR/render.cpp" "$projectpath/" || exit 1
